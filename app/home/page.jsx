@@ -1,12 +1,13 @@
 // @ts-nocheck
 import { Suspense } from 'react';
-import Home from '../components/Home/index.jsx';
-import '../components/shared/global.scss';
-import { getAllProducts } from '../data/db.js';
+import '../../components/shared/global.scss';
+import { getAllProducts } from '../../data/db.js';
+import Home from '../../components/Home';
 
 export async function HomePage() {
 	const products = await getAllProducts();
-	return <Home products={products}></Home>;
+	const threeProducts = products.slice(0, 3);
+	return <Home products={threeProducts}></Home>;
 }
 export default async function Page() {
 	return (

@@ -10,7 +10,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { parse } from 'es-module-lexer';
 import { relative } from 'node:path';
 import { sassPlugin } from 'esbuild-sass-plugin';
-import copy from 'esbuild-plugin-copy';
+import { readdir } from 'fs/promises';
 
 const app = new Hono();
 const clientComponentMap = {};
@@ -43,12 +43,16 @@ app.get('/', async (c) => {
  * into encoded virtual DOM elements for the client to read.
  */
 app.get('/rsc', async (c) => {
-	// Note This will raise a type error until you build with `npm run dev`
-	const Page = await import('./build/page.js');
-	const Comp = createElement(Page.default);
+	const directories = await getDirectories('./app');
 
-	const stream = ReactServerDom.renderToReadableStream(Comp, clientComponentMap);
-	return new Response(stream);
+	for (let dir = 0; dir < directories.length; dir++) {
+		// Note This will raise a type error until you build with `npm run dev`
+		const Page = await import(`./build/${directories[dir]}/page.js`);
+		const Comp = createElement(Page.default);
+
+		const stream = ReactServerDom.renderToReadableStream(Comp, clientComponentMap);
+		return new Response(stream);
+	}
 });
 
 /**
@@ -59,56 +63,57 @@ app.get('/rsc', async (c) => {
 app.use('/build/*', serveStatic());
 
 /**
+ *  Serve static assets from the public folder for any other route
+ */
+app.use('/*', serveStatic({ root: './public' }));
+
+/**
  * Build both server and client components with esbuild
  */
 async function build() {
 	const clientEntryPoints = new Set();
 
-	/** Build the server component tree */
-	await esbuild({
-		bundle: true,
-		format: 'esm',
-		logLevel: 'error',
-		entryPoints: [resolveApp('page.jsx')],
-		outdir: resolveBuild(),
-		// avoid bundling npm packages for server-side components
-		packages: 'external',
-		plugins: [
-			{
-				name: 'resolve-client-imports',
-				setup(build) {
-					// Intercept component imports to check for 'use client'
-					build.onResolve({ filter: reactComponentRegex }, async ({ path: relativePath }) => {
-						const path = resolveApp(relativePath);
+	const directories = await getDirectories('./app');
 
-						const contents = await readFile(path, 'utf-8');
+	for (let dir = 0; dir < directories.length; dir++) {
+		/** Build the server component tree */
+		await esbuild({
+			bundle: true,
+			format: 'esm',
+			logLevel: 'error',
+			entryPoints: [resolveApp(`${directories[dir]}/page.jsx`)],
+			outdir: resolveBuild(`${directories[dir]}`),
+			packages: 'external', // avoid bundling npm packages for server-side components
+			plugins: [
+				{
+					name: 'resolve-client-imports',
+					setup(build) {
+						// Intercept component imports to check for 'use client'
+						build.onResolve({ filter: reactComponentRegex }, async ({ path: relativePath }) => {
+							const path = resolveApp(relativePath);
 
-						if (contents.startsWith("'use client'")) {
-							clientEntryPoints.add(path);
-							return {
-								// Avoid bundling client components into the server build.
-								external: true,
-								// Resolve the client import to the built `.js` file
-								// created by the client `esbuild` process below.
-								path: relativePath.replace(reactComponentRegex, '.js')
-							};
-						}
-					});
-				}
-			},
-			sassPlugin(),
-			copy({
-				resolveFrom: 'cwd',
-				assets: {
-					from: ['./public/**/*'], // Source
-					to: ['./build'] // Destination
-				}
-			})
-		],
-		loader: {
-			'.png': 'file' // Add other extensions if necessary, like '.jpg', '.svg', etc.
-		}
-	});
+							const contents = await readFile(path, 'utf-8');
+
+							if (contents.startsWith("'use client'")) {
+								clientEntryPoints.add(path);
+								return {
+									// Avoid bundling client components into the server build.
+									external: true,
+									// Resolve the client import to the built `.js` file
+									// created by the client `esbuild` process below.
+									path: relativePath.replace(reactComponentRegex, '.js')
+								};
+							}
+						});
+					}
+				},
+				sassPlugin()
+			],
+			loader: {
+				'.png': 'file' // Add other extensions if necessary, like '.jpg', '.svg', etc.
+			}
+		});
+	}
 
 	/** Build client components */
 	const { outputFiles } = await esbuild({
@@ -158,10 +163,16 @@ ${exp.ln}.$$typeof = Symbol.for("react.client.reference");
 	});
 }
 
-serve(app, async (info) => {
-	await build();
-	console.log(`Listening on http://localhost:${info.port}`);
-});
+serve(
+	{
+		fetch: app.fetch,
+		port: 8787
+	},
+	async (info) => {
+		await build();
+		console.log(`Listening on http://localhost:${info.port}`);
+	}
+);
 
 /** UTILS */
 
@@ -182,3 +193,8 @@ function resolveComponent(path = '') {
 }
 
 const reactComponentRegex = /\.jsx$/;
+
+async function getDirectories(source) {
+	const dirents = await readdir(source, { withFileTypes: true });
+	return dirents.filter((dirent) => dirent.isDirectory()).map((dirent) => dirent.name);
+}
