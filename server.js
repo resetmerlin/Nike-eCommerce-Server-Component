@@ -9,6 +9,8 @@ import * as ReactServerDom from 'react-server-dom-webpack/server.browser';
 import { readFile, writeFile } from 'node:fs/promises';
 import { parse } from 'es-module-lexer';
 import { relative } from 'node:path';
+import { sassPlugin } from 'esbuild-sass-plugin';
+import copy from 'esbuild-plugin-copy';
 
 const app = new Hono();
 const clientComponentMap = {};
@@ -25,6 +27,7 @@ app.get('/', async (c) => {
 	<head>
 		<title>React Server Components from Scratch</title>
 		<script src="https://cdn.tailwindcss.com"></script>
+		<link rel="stylesheet" href="/build/page.css">
 	</head>
 	<body>
 		<div id="root"></div>
@@ -92,8 +95,19 @@ async function build() {
 						}
 					});
 				}
-			}
-		]
+			},
+			sassPlugin(),
+			copy({
+				resolveFrom: 'cwd',
+				assets: {
+					from: ['./public/**/*'], // Source
+					to: ['./build'] // Destination
+				}
+			})
+		],
+		loader: {
+			'.png': 'file' // Add other extensions if necessary, like '.jpg', '.svg', etc.
+		}
 	});
 
 	/** Build client components */
