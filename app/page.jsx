@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Suspense } from 'react';
 import Home from '../components/Home/index.jsx';
 import '../components/shared/global.scss';
