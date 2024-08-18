@@ -1,6 +1,7 @@
-import { Suspense } from 'react';
 import { getAll } from '../data/db.js';
 import Like from './Like.jsx';
+import Cart from '../components/Cart/index.jsx';
+import '../components/shared/global.scss';
 
 async function Albums() {
 	const albums = await getAll();
@@ -21,13 +22,5 @@ async function Albums() {
 }
 
 export default async function Page() {
-	return (
-		<>
-			<h1 className="text-3xl mb-3">Spotifn’t</h1>
-			<Suspense fallback="Getting albums">
-				{/* @ts-expect-error 'Promise<Element>' is not a valid JSX element. */}
-				<Albums />
-			</Suspense>
-		</>
-	);
+	return <Cart></Cart>;
 }
