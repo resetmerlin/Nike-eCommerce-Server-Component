@@ -1,0 +1,25 @@
+.template-s {
+	width: 85%;
+
+	@media (max-width: 37.5em) {
+		//600px
+		width: 100%;
+	}
+}
+
+.template-m {
+	width: 90%;
+}
+
+.template-full {
+	width: 100%;
+}
+
+.template {
+	height: auto;
+	display: grid;
+	grid-template-columns: repeat(7, 1fr);
+	grid-template-rows: 0.3fr 0.5fr repeat(2, 0.3fr) 1fr 0.11fr 1fr 0.3fr 1fr 0.3fr;
+	grid-column-gap: 0px;
+	grid-row-gap: 0px;
+}
