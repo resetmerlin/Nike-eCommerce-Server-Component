@@ -8,6 +8,7 @@ import './Card.scss';
 const Card = ({ product }) => {
 	return (
 		<div className="card">
+			<img src={`./products/${product._id}.png`} alt="productId" id="nike-product" />
 			<div className="card__content">
 				<SubTitle size="m">{product?.name}</SubTitle>
 
