@@ -10,10 +10,16 @@ window.__webpack_require__ = async (id) => {
 // @ts-expect-error `root` might be null
 const root = createRoot(document.getElementById('root'));
 
+// Get the current pathname to request the appropriate server component
+const pathname = window.location.pathname;
+
+// Construct the fetch URL for the server component stream
+const fetchUrl = `/rsc${pathname}`;
+
 /**
- * Fetch your server component stream from `/rsc`
+ * Fetch your server component stream from `/rsc/[route]`
  * and render results into the root element as they come in.
  */
-createFromFetch(fetch('/rsc')).then((comp) => {
+createFromFetch(fetch(fetchUrl)).then((comp) => {
 	root.render(comp);
 });

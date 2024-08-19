@@ -33,54 +33,19 @@ async function getDirectories(source) {
 	return dirents.filter((dirent) => dirent.isDirectory()).map((dirent) => dirent.name);
 }
 
-// Fetching all directories within the 'app' directory
-const directories = await getDirectories(resolveApp(''));
-
-// Dynamically create routes based on directories
-for (let index = 0; index < directories.length; index++) {
-	app.get(`/${directories[index]}`, async (c) => {
-		return c.html(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>React Server Components from Scratch</title>
-            <link rel="stylesheet" href="/build/${directories[index]}/page.css">
-        </head>
-        <body>
-            <div id="root"></div>
-            <script type="module" src="/build/_client.js"></script>
-        </body>
-        </html>
-        `);
-	});
-}
-
-// Endpoint to render server component to a stream
-app.get('/rsc', async (c) => {
-	for (let dir = 0; dir < directories.length; dir++) {
-		const Page = await import(`./build/${directories[dir]}/page.js`);
-		const Comp = createElement(Page.default);
-
-		const stream = ReactServerDom.renderToReadableStream(Comp, clientComponentMap);
-		return new Response(stream);
-	}
-});
-
-// Serve static assets from 'build' and 'public' directories
-app.use('/build/*', serveStatic());
-app.use('/*', serveStatic({ root: './public' }));
-
-// Build function to compile server and client components
+// Function to build client and server bundles
 async function build() {
 	const clientEntryPoints = new Set();
+	const directories = await getDirectories(resolveApp(''));
 
-	for (let dir = 0; dir < directories.length; dir++) {
+	for (let dir of directories) {
+		// Build server components
 		await esbuild({
 			bundle: true,
 			format: 'esm',
 			logLevel: 'error',
-			entryPoints: [resolveApp(`${directories[dir]}/page.jsx`)],
-			outdir: resolveBuild(`${directories[dir]}`),
+			entryPoints: [resolveApp(`${dir}/page.jsx`)],
+			outdir: resolveBuild(dir),
 			packages: 'external',
 			plugins: [
 				{
@@ -103,11 +68,12 @@ async function build() {
 				sassPlugin()
 			],
 			loader: {
-				'.png': 'file'
+				'.png': 'file' // Loader for images
 			}
 		});
 	}
 
+	// Build client components
 	const { outputFiles } = await esbuild({
 		bundle: true,
 		format: 'esm',
@@ -118,7 +84,8 @@ async function build() {
 		write: false
 	});
 
-	outputFiles.forEach(async (file) => {
+	// Update client component map with references
+	for (let file of outputFiles) {
 		const [, exports] = parse(file.text);
 		let newContents = file.text;
 
@@ -137,16 +104,61 @@ ${exp.ln}.$$typeof = Symbol.for("react.client.reference");
             `;
 		}
 		await writeFile(file.path, newContents);
-	});
+	}
 }
 
-serve(
-	{
-		fetch: app.fetch,
-		port: 8787
-	},
-	async (info) => {
-		await build();
-		console.log(`Listening on http://localhost:${info.port}`);
+// Function to dynamically create routes based on the directories
+async function createRoutes() {
+	const directories = await getDirectories(resolveApp(''));
+
+	for (let dir of directories) {
+		app.get(`/${dir}`, async (c) => {
+			return c.html(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>${dir} - My Website</title>
+            <link rel="stylesheet" href="/build/${dir}/page.css">
+        </head>
+        <body>
+            <div id="root"></div>
+            <script type="module" src="/build/_client.js"></script>
+        </body>
+        </html>
+        `);
+		});
+
+		// Endpoint to render the server component to a stream
+		app.get(`/rsc/${dir}`, async (c) => {
+			const Page = await import(`./build/${dir}/page.js`);
+			const Comp = createElement(Page.default);
+
+			const stream = ReactServerDom.renderToReadableStream(Comp, clientComponentMap);
+			return new Response(stream);
+		});
 	}
-);
+}
+
+// Serve static assets from 'build' and 'public' directories
+app.use('/build/*', serveStatic());
+app.use('/*', serveStatic({ root: './public' }));
+
+// Initialize and start the server
+async function startServer() {
+	await build();
+	await createRoutes();
+
+	serve(
+		{
+			fetch: app.fetch,
+			port: 8787
+		},
+		(info) => {
+			console.log(`Listening on http://localhost:${info.port}`);
+		}
+	);
+}
+
+startServer().catch((err) => {
+	console.error('Failed to start the server:', err);
+});
