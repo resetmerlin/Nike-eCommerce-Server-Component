@@ -24,7 +24,7 @@ const Header = ({ userInfo, logOut }) => {
 	return (
 		<div className="header" id="header">
 			<div className="header__left">
-				<a href="/">
+				<a href="/home">
 					<Logo src={`/nike-logo-black.png`} size="l" />
 				</a>
 			</div>
