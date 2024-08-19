@@ -3,6 +3,8 @@
 import SubTitle from '../shared/titles/SubTitle';
 import Title from '../shared/titles/Title';
 
+import './Intro.scss';
+
 const Intro = () => {
 	return (
 		<div className="intro">
@@ -21,7 +23,13 @@ const Intro = () => {
 					You will experience outstanding <br /> Nike Resell shop ever <br /> seen before
 				</SubTitle>
 			</div>
-			{/* <IntroCenter /> */}
+			<img
+				src={`./products/64057e49aafc2434e58a9485.png`}
+				alt="productId"
+				id="nike-product"
+				className="intro-center"
+			/>
+
 			<div className="intro-background">
 				<Title size="max" color="secondary" strength="500">
 					NIKE
