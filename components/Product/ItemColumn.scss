@@ -1,0 +1,15 @@
+.item-column {
+	width: 14rem;
+	height: 13rem;
+	a {
+		width: auto;
+		height: auto;
+	}
+
+	.box-border {
+		border: 2px solid black;
+	}
+	img {
+		object-fit: cover;
+	}
+}
