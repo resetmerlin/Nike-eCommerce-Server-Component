@@ -2,7 +2,7 @@
 import { Suspense } from 'react';
 import '../../components/shared/global.scss';
 import { getAllProducts } from '../../data/db.js';
-import Home from '../../components/Home';
+import Home from '../../components/Home/index.jsx';
 
 export async function HomePage() {
 	const products = await getAllProducts();

@@ -1,8 +1,8 @@
-// @ts-nocheck
 import { Suspense } from 'react';
 import '../../components/shared/global.scss';
 import { getAllProducts } from '../../data/db.js';
-import Product from '../../components/Product';
+// must put jsx
+import Product from '../../components/Product/index.jsx';
 
 export async function ProductPage() {
 	const products = await getAllProducts();
