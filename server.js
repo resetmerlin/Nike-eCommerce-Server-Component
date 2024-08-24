@@ -35,8 +35,8 @@ async function getDirectories(source) {
 	return dirents.filter((dirent) => dirent.isDirectory()).map((dirent) => dirent.name);
 }
 
-// Function to build client and server bundles
-async function build() {
+/** Build Server Components and Add lists of client components */
+async function buildRSC() {
 	const clientEntryPoints = new Set();
 	const directories = await getDirectories(resolveApp(''));
 
@@ -60,35 +60,47 @@ async function build() {
 									return { external: true }; // Skip processing .scss files
 								}
 
-								let absolutePath;
-								// Resolve relative and absolute paths properly
-								if (relativePath.startsWith('.')) {
-									absolutePath = path.resolve(path.dirname(importer), relativePath);
-								} else {
-									absolutePath = resolveApp(relativePath);
-								}
+								/**
+								 * if the path starts with relative path, change it into absolute path
+								 * @example
+								 * ../../components/Product/index.jsx
+								 * // into
+								 * yourRootDir/components/Product/index.jsx
+								 */
+								const absolutePath = relativePath.startsWith('.')
+									? path.resolve(path.dirname(importer), relativePath)
+									: resolveApp(relativePath);
 
 								const contents = await readFile(absolutePath, 'utf-8');
 
-								const relativeEntryPoint = path.relative(rootDir, absolutePath);
+								/**
+								 * Get relative entry points based on the root directory and absolute directory
+								 * @example
+								 * yourRootDir/components/Product/index.jsx
+								 * // into
+								 * components/Product/index.jsx
+								 *
+								 */
+								const entryDirLists = path.relative(rootDir, absolutePath);
 
-								if (!relativeEntryPoint.startsWith('app')) {
-									if (contents.startsWith("'use client'")) {
-										clientEntryPoints.add(absolutePath);
-										return {
-											external: true,
-											path: resolveBuild(relativeEntryPoint).replace(reactComponentRegex, '.js')
-										};
-									}
-								} else {
-									if (contents.startsWith("'use client'")) {
-										clientEntryPoints.add(absolutePath);
-										return {
-											external: true,
-											path: relativePath.replace(reactComponentRegex, '.js')
-										};
-									}
+								// Needs to bundle client component and server component separately. so add client components path to build later
+
+								if (!contents.startsWith("'use client'")) return; // check it is not client component or not
+
+								clientEntryPoints.add(absolutePath);
+								// check is client component is outside of server component, ex: components/Product/index.jsx
+								if (!entryDirLists.startsWith('app')) {
+									return {
+										external: true,
+										// change import path into build components path ex: /home/resetmerlin/UbuntuCodeRepo/Nike-eCommerce-Server-Component/build/components/Product/index.js
+										path: resolveBuild(entryDirLists).replace(reactComponentRegex, '.js')
+									};
 								}
+
+								return {
+									external: true,
+									path: absolutePath.replace(reactComponentRegex, '.js')
+								};
 							}
 						);
 					}
@@ -96,61 +108,45 @@ async function build() {
 				sassPlugin()
 			],
 			loader: {
-				'.png': 'file' // Loader for images
+				'.png': 'file'
 			}
 		});
 	}
 
-	// Build client components
-	const { outputFiles } = await esbuild({
+	return { clientEntryPoints };
+}
+
+/** Build client components */
+async function buildClient(clientEntryPoints) {
+	// Build _client.jsx file
+	await esbuild({
 		bundle: true,
 		format: 'esm',
 		logLevel: 'error',
 		entryPoints: [resolveApp('_client.jsx')],
-		outdir: resolveBuild(), // ensure output is correct
+		outdir: resolveBuild(),
 		splitting: true,
-		write: false
+		write: true
 	});
 
-	for (let file of outputFiles) {
-		const [, exports] = parse(file.text);
-		let newContents = file.text;
+	const outDirs = [...clientEntryPoints].map((entry) => {
+		const relativeEntryPoint = path.relative(rootDir, entry);
 
-		for (const exp of exports) {
-			const key = file.path + exp.n;
-			clientComponentMap[key] = {
-				id: `/build/${relative(resolveBuild(), file.path)}`,
-				name: exp.n,
-				chunks: [],
-				async: true
-			};
+		const fullPath = relativeEntryPoint.split('/');
 
-			newContents += `
-${exp.ln}.$$id = ${JSON.stringify(key)};
-${exp.ln}.$$typeof = Symbol.for("react.client.reference");
-            `;
-		}
+		// hard coding
+		if (relativeEntryPoint.endsWith('.jsx')) fullPath.pop(); // de
 
-		await writeFile(file.path, newContents);
-	}
+		return resolveBuild(fullPath.join('/'));
+	});
 
-	const entryPoints = [...clientEntryPoints];
-
-	for (let index = 0; index < [...clientEntryPoints].length; index++) {
-		const clientEntryPoint = entryPoints[index];
-
-		const relativeEntryPoint = path.relative(rootDir, clientEntryPoint);
-
-		const fuck = relativeEntryPoint.split('/');
-
-		fuck.pop();
-
-		const { outputFiles: clientOutputFiles } = await esbuild({
+	outDirs.forEach(async (outdir) => {
+		const { outputFiles } = await esbuild({
 			bundle: true,
 			format: 'esm',
 			logLevel: 'error',
-			entryPoints: [clientEntryPoint],
-			outdir: `./build/${fuck.join('/')}`,
+			entryPoints: [...clientEntryPoints],
+			outdir,
 			splitting: true,
 			write: false,
 			plugins: [
@@ -176,7 +172,19 @@ ${exp.ln}.$$typeof = Symbol.for("react.client.reference");
 			]
 		});
 
-		for (let file of clientOutputFiles) {
+		outputFiles.forEach(async (file) => {
+			/**
+		 *  Parse file export names
+		 * 	@example
+		 * {
+				s: 136352,
+				e: 136359,
+				ls: 136333,
+				le: 136348,
+				n: 'default',
+				ln: 'Product_default'
+			  }
+		 */
 			const [, exports] = parse(file.text);
 			let newContents = file.text;
 
@@ -191,14 +199,19 @@ ${exp.ln}.$$typeof = Symbol.for("react.client.reference");
 				};
 
 				newContents += `
-	${exp.ln}.$$id = ${JSON.stringify(key)};
-	${exp.ln}.$$typeof = Symbol.for("react.client.reference");
-				`;
+${exp.ln}.$$id = ${JSON.stringify(key)};
+${exp.ln}.$$typeof = Symbol.for("react.client.reference");
+			`;
 			}
 
 			await writeFile(file.path, newContents);
-		}
-	}
+		});
+	});
+}
+// Function to build client and server bundles
+async function build() {
+	const { clientEntryPoints } = await buildRSC();
+	await buildClient(clientEntryPoints);
 }
 
 // Function to dynamically create routes based on the directories
