@@ -100,79 +100,46 @@ async function buildRSC() {
 async function buildClient(clientEntryPoints) {
 	const directories = await getDirectoriesPath(resolveApp(''));
 
-	const dir = directories.map((dir) => {
+	const bundleDir = directories.map((dir) => {
 		const relativeEntryPoint = dir + '/_client.jsx';
 
-		return relativeEntryPoint;
+		return {
+			entry: relativeEntryPoint,
+			// @ts-ignore
+			outdir: resolveBuild(path.relative(ROOT_DIRECTORY, dir.split('/').pop()))
+		};
 	});
 
-	// Build _client.jsx file
-	await esbuild({
-		bundle: true,
-		format: 'esm',
-		logLevel: 'error',
-		entryPoints: [...dir],
-		outdir: resolveBuild(),
-		splitting: true,
-		write: true
-	});
-
-	const outDirs = [...clientEntryPoints].map((entry) => {
+	const clientsComponentDir = [...clientEntryPoints].map((entry) => {
 		const relativeEntryPoint = path.relative(ROOT_DIRECTORY, entry);
 
 		const fullPath = relativeEntryPoint.split('/');
 
 		// hard coding
-		if (relativeEntryPoint.endsWith('.jsx')) fullPath.pop(); // de
+		if (relativeEntryPoint.endsWith('.jsx')) fullPath.pop();
 
-		return resolveCreateBuild(fullPath.join('/'));
+		return { entry, outdir: resolveCreateBuild(fullPath.join('/')) };
 	});
 
-	outDirs.forEach(async (outdir) => {
+	for (const { entry, outdir } of [...bundleDir, ...clientsComponentDir]) {
 		const { outputFiles } = await esbuild({
 			bundle: true,
 			format: 'esm',
 			logLevel: 'error',
-			entryPoints: [...clientEntryPoints],
+			entryPoints: [entry],
 			outdir,
-			splitting: true,
+			splitting: false,
 			write: false,
 			plugins: [
-				{
-					name: 'inline-scss',
-					setup(build) {
-						// Resolve SCSS imports
-						build.onResolve({ filter: /\.scss$/ }, async (args) => {
-							const absolutePath = path.resolve(path.dirname(args.importer), args.path);
-							return { path: absolutePath, namespace: 'scss' };
-						});
-
-						// Load SCSS and convert it to CSS
-						build.onLoad({ filter: /.*/, namespace: 'scss' }, async (args) => {
-							const result = renderSync({ file: args.path });
-							return {
-								contents: result.css.toString(),
-								loader: 'css'
-							};
-						});
-					}
-				}
-			]
+				sassPlugin() // Include the sassPlugin for client build
+			],
+			loader: {
+				'.jsx': 'jsx', // Ensuring that .jsx files are handled correctly
+				'.scss': 'css' // Ensuring that .scss files are handled correctly
+			}
 		});
 
-		outputFiles.forEach(async (file) => {
-			/**
-		 *  Parse file export names
-		 * 	@example
-		 * {
-				s: 136352,
-				e: 136359,
-				ls: 136333,
-				le: 136348,
-				n: 'default',
-				ln: 'Product_default'
-			  }
-		 */
+		[...outputFiles].forEach(async (file) => {
 			const [, exports] = parse(file.text);
 			let newContents = file.text;
 
@@ -204,7 +171,7 @@ ${exp.ln}.$$typeof = Symbol.for("react.client.reference");
 
 			await writeFile(file.path, newContents);
 		});
-	});
+	}
 }
 // Function to build client and server bundles
 async function build() {
