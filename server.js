@@ -11,6 +11,7 @@ import path, { relative, dirname } from 'node:path';
 import { sassPlugin } from 'esbuild-sass-plugin';
 import { readdir } from 'fs/promises';
 import { renderSync } from 'sass';
+import { existsSync, mkdirSync } from 'node:fs';
 
 const app = new Hono();
 const clientComponentMap = {};
@@ -26,6 +27,15 @@ function resolveApp(path = '') {
 
 function resolveBuild(path = '') {
 	return fileURLToPath(new URL(path, buildDir));
+}
+
+function resolveCreateBuild(path = '') {
+	const dir = fileURLToPath(new URL(path, buildDir));
+
+	if (!existsSync(dir)) {
+		mkdirSync(dir, { recursive: true });
+	}
+	return dir;
 }
 
 const reactComponentRegex = /\.jsx$/;
@@ -137,7 +147,7 @@ async function buildClient(clientEntryPoints) {
 		// hard coding
 		if (relativeEntryPoint.endsWith('.jsx')) fullPath.pop(); // de
 
-		return resolveBuild(fullPath.join('/'));
+		return resolveCreateBuild(fullPath.join('/'));
 	});
 
 	outDirs.forEach(async (outdir) => {
