@@ -7,9 +7,10 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import * as ReactServerDom from 'react-server-dom-webpack/server.browser';
 import { readFile, writeFile } from 'node:fs/promises';
 import { parse } from 'es-module-lexer';
-import { relative } from 'node:path';
+import path, { relative, dirname } from 'node:path';
 import { sassPlugin } from 'esbuild-sass-plugin';
 import { readdir } from 'fs/promises';
+import { renderSync } from 'sass';
 
 const app = new Hono();
 const clientComponentMap = {};
@@ -17,6 +18,7 @@ const clientComponentMap = {};
 // Utility functions to resolve paths
 const appDir = new URL('./app/', import.meta.url);
 const buildDir = new URL('./build/', import.meta.url);
+const rootDir = process.cwd();
 
 function resolveApp(path = '') {
 	return fileURLToPath(new URL(path, appDir));
@@ -51,18 +53,44 @@ async function build() {
 				{
 					name: 'resolve-client-imports',
 					setup(build) {
-						build.onResolve({ filter: reactComponentRegex }, async ({ path: relativePath }) => {
-							const path = resolveApp(relativePath);
-							const contents = await readFile(path, 'utf-8');
+						build.onResolve(
+							{ filter: reactComponentRegex },
+							async ({ path: relativePath, importer }) => {
+								if (relativePath.endsWith('.scss')) {
+									return { external: true }; // Skip processing .scss files
+								}
 
-							if (contents.startsWith("'use client'")) {
-								clientEntryPoints.add(path);
-								return {
-									external: true,
-									path: relativePath.replace(reactComponentRegex, '.js')
-								};
+								let absolutePath;
+								// Resolve relative and absolute paths properly
+								if (relativePath.startsWith('.')) {
+									absolutePath = path.resolve(path.dirname(importer), relativePath);
+								} else {
+									absolutePath = resolveApp(relativePath);
+								}
+
+								const contents = await readFile(absolutePath, 'utf-8');
+
+								const relativeEntryPoint = path.relative(rootDir, absolutePath);
+
+								if (!relativeEntryPoint.startsWith('app')) {
+									if (contents.startsWith("'use client'")) {
+										clientEntryPoints.add(absolutePath);
+										return {
+											external: true,
+											path: resolveBuild(relativeEntryPoint).replace(reactComponentRegex, '.js')
+										};
+									}
+								} else {
+									if (contents.startsWith("'use client'")) {
+										clientEntryPoints.add(absolutePath);
+										return {
+											external: true,
+											path: relativePath.replace(reactComponentRegex, '.js')
+										};
+									}
+								}
 							}
-						});
+						);
 					}
 				},
 				sassPlugin()
@@ -78,13 +106,12 @@ async function build() {
 		bundle: true,
 		format: 'esm',
 		logLevel: 'error',
-		entryPoints: [resolveApp('_client.jsx'), ...clientEntryPoints],
-		outdir: resolveBuild(),
+		entryPoints: [resolveApp('_client.jsx')],
+		outdir: resolveBuild(), // ensure output is correct
 		splitting: true,
 		write: false
 	});
 
-	// Update client component map with references
 	for (let file of outputFiles) {
 		const [, exports] = parse(file.text);
 		let newContents = file.text;
@@ -103,7 +130,74 @@ ${exp.ln}.$$id = ${JSON.stringify(key)};
 ${exp.ln}.$$typeof = Symbol.for("react.client.reference");
             `;
 		}
+
 		await writeFile(file.path, newContents);
+	}
+
+	const entryPoints = [...clientEntryPoints];
+
+	for (let index = 0; index < [...clientEntryPoints].length; index++) {
+		const clientEntryPoint = entryPoints[index];
+
+		const relativeEntryPoint = path.relative(rootDir, clientEntryPoint);
+
+		const fuck = relativeEntryPoint.split('/');
+
+		fuck.pop();
+
+		const { outputFiles: clientOutputFiles } = await esbuild({
+			bundle: true,
+			format: 'esm',
+			logLevel: 'error',
+			entryPoints: [clientEntryPoint],
+			outdir: `./build/${fuck.join('/')}`,
+			splitting: true,
+			write: false,
+			plugins: [
+				{
+					name: 'inline-scss',
+					setup(build) {
+						// Resolve SCSS imports
+						build.onResolve({ filter: /\.scss$/ }, async (args) => {
+							const absolutePath = path.resolve(path.dirname(args.importer), args.path);
+							return { path: absolutePath, namespace: 'scss' };
+						});
+
+						// Load SCSS and convert it to CSS
+						build.onLoad({ filter: /.*/, namespace: 'scss' }, async (args) => {
+							const result = renderSync({ file: args.path });
+							return {
+								contents: result.css.toString(),
+								loader: 'css'
+							};
+						});
+					}
+				}
+			]
+		});
+
+		for (let file of clientOutputFiles) {
+			const [, exports] = parse(file.text);
+			let newContents = file.text;
+
+			for (const exp of exports) {
+				const key = file.path + exp.n;
+
+				clientComponentMap[key] = {
+					id: `/build/${relative(resolveBuild(), file.path)}`,
+					name: exp.n,
+					chunks: [],
+					async: true
+				};
+
+				newContents += `
+	${exp.ln}.$$id = ${JSON.stringify(key)};
+	${exp.ln}.$$typeof = Symbol.for("react.client.reference");
+				`;
+			}
+
+			await writeFile(file.path, newContents);
+		}
 	}
 }
 
@@ -151,7 +245,7 @@ async function startServer() {
 	serve(
 		{
 			fetch: app.fetch,
-			port: 8787
+			port: 8930
 		},
 		(info) => {
 			console.log(`Listening on http://localhost:${info.port}`);
