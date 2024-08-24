@@ -1,49 +1,20 @@
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { build as esbuild } from 'esbuild';
-import { fileURLToPath } from 'node:url';
 import { createElement } from 'react';
 import { serveStatic } from '@hono/node-server/serve-static';
 import * as ReactServerDom from 'react-server-dom-webpack/server.browser';
 import { readFile, writeFile } from 'node:fs/promises';
 import { parse } from 'es-module-lexer';
-import path, { relative, dirname } from 'node:path';
+import path, { relative } from 'node:path';
 import { sassPlugin } from 'esbuild-sass-plugin';
-import { readdir } from 'fs/promises';
 import { renderSync } from 'sass';
-import { existsSync, mkdirSync } from 'node:fs';
+import { getDirectories, resolveApp, resolveBuild, resolveCreateBuild } from './utils.js';
 
 const app = new Hono();
-const clientComponentMap = {};
-
-// Utility functions to resolve paths
-const appDir = new URL('./app/', import.meta.url);
-const buildDir = new URL('./build/', import.meta.url);
-const rootDir = process.cwd();
-
-function resolveApp(path = '') {
-	return fileURLToPath(new URL(path, appDir));
-}
-
-function resolveBuild(path = '') {
-	return fileURLToPath(new URL(path, buildDir));
-}
-
-function resolveCreateBuild(path = '') {
-	const dir = fileURLToPath(new URL(path, buildDir));
-
-	if (!existsSync(dir)) {
-		mkdirSync(dir, { recursive: true });
-	}
-	return dir;
-}
-
-const reactComponentRegex = /\.jsx$/;
-
-async function getDirectories(source) {
-	const dirents = await readdir(source, { withFileTypes: true });
-	return dirents.filter((dirent) => dirent.isDirectory()).map((dirent) => dirent.name);
-}
+const CLIENT_COMPONENT_MAP = {};
+const ROOT_DIRECTORY = process.cwd();
+const REACT_COMPONENT_REGEX = /\.jsx$/;
 
 /** Build Server Components and Add lists of client components */
 async function buildRSC() {
@@ -64,7 +35,7 @@ async function buildRSC() {
 					name: 'resolve-client-imports',
 					setup(build) {
 						build.onResolve(
-							{ filter: reactComponentRegex },
+							{ filter: REACT_COMPONENT_REGEX },
 							async ({ path: relativePath, importer }) => {
 								if (relativePath.endsWith('.scss')) {
 									return { external: true }; // Skip processing .scss files
@@ -91,7 +62,7 @@ async function buildRSC() {
 								 * components/Product/index.jsx
 								 *
 								 */
-								const entryDirLists = path.relative(rootDir, absolutePath);
+								const entryDirLists = path.relative(ROOT_DIRECTORY, absolutePath);
 
 								// Needs to bundle client component and server component separately. so add client components path to build later
 
@@ -103,13 +74,13 @@ async function buildRSC() {
 									return {
 										external: true,
 										// change import path into build components path ex: /home/resetmerlin/UbuntuCodeRepo/Nike-eCommerce-Server-Component/build/components/Product/index.js
-										path: resolveBuild(entryDirLists).replace(reactComponentRegex, '.js')
+										path: resolveBuild(entryDirLists).replace(REACT_COMPONENT_REGEX, '.js')
 									};
 								}
 
 								return {
 									external: true,
-									path: absolutePath.replace(reactComponentRegex, '.js')
+									path: absolutePath.replace(REACT_COMPONENT_REGEX, '.js')
 								};
 							}
 						);
@@ -140,7 +111,7 @@ async function buildClient(clientEntryPoints) {
 	});
 
 	const outDirs = [...clientEntryPoints].map((entry) => {
-		const relativeEntryPoint = path.relative(rootDir, entry);
+		const relativeEntryPoint = path.relative(ROOT_DIRECTORY, entry);
 
 		const fullPath = relativeEntryPoint.split('/');
 
@@ -201,7 +172,7 @@ async function buildClient(clientEntryPoints) {
 			for (const exp of exports) {
 				const key = file.path + exp.n;
 
-				clientComponentMap[key] = {
+				CLIENT_COMPONENT_MAP[key] = {
 					id: `/build/${relative(resolveBuild(), file.path)}`,
 					name: exp.n,
 					chunks: [],
@@ -250,7 +221,7 @@ async function createRoutes() {
 			const Page = await import(`./build/${dir}/page.js`);
 			const Comp = createElement(Page.default);
 
-			const stream = ReactServerDom.renderToReadableStream(Comp, clientComponentMap);
+			const stream = ReactServerDom.renderToReadableStream(Comp, CLIENT_COMPONENT_MAP);
 			return new Response(stream);
 		});
 	}
