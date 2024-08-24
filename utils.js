@@ -26,3 +26,10 @@ export async function getDirectories(source) {
 	const dirents = await readdir(source, { withFileTypes: true });
 	return dirents.filter((dirent) => dirent.isDirectory()).map((dirent) => dirent.name);
 }
+
+export async function getDirectoriesPath(source) {
+	const dirents = await readdir(source, { withFileTypes: true });
+	return dirents
+		.filter((dirent) => dirent.isDirectory())
+		.map((dirent) => dirent.parentPath + dirent.name);
+}

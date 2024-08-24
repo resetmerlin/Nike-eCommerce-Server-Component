@@ -9,7 +9,13 @@ import { parse } from 'es-module-lexer';
 import path, { relative } from 'node:path';
 import { sassPlugin } from 'esbuild-sass-plugin';
 import { renderSync } from 'sass';
-import { getDirectories, resolveApp, resolveBuild, resolveCreateBuild } from './utils.js';
+import {
+	getDirectories,
+	getDirectoriesPath,
+	resolveApp,
+	resolveBuild,
+	resolveCreateBuild
+} from './utils.js';
 
 const app = new Hono();
 const CLIENT_COMPONENT_MAP = {};
@@ -70,17 +76,10 @@ async function buildRSC() {
 
 								clientEntryPoints.add(absolutePath);
 								// check is client component is outside of server component, ex: components/Product/index.jsx
-								if (!entryDirLists.startsWith('app')) {
-									return {
-										external: true,
-										// change import path into build components path ex: /home/resetmerlin/UbuntuCodeRepo/Nike-eCommerce-Server-Component/build/components/Product/index.js
-										path: resolveBuild(entryDirLists).replace(REACT_COMPONENT_REGEX, '.js')
-									};
-								}
-
 								return {
 									external: true,
-									path: absolutePath.replace(REACT_COMPONENT_REGEX, '.js')
+									// change import path into build components path ex: /home/resetmerlin/UbuntuCodeRepo/Nike-eCommerce-Server-Component/build/components/Product/index.js
+									path: resolveBuild(entryDirLists).replace(REACT_COMPONENT_REGEX, '.js')
 								};
 							}
 						);
@@ -99,12 +98,20 @@ async function buildRSC() {
 
 /** Build client components */
 async function buildClient(clientEntryPoints) {
+	const directories = await getDirectoriesPath(resolveApp(''));
+
+	const dir = directories.map((dir) => {
+		const relativeEntryPoint = dir + '/_client.jsx';
+
+		return relativeEntryPoint;
+	});
+
 	// Build _client.jsx file
 	await esbuild({
 		bundle: true,
 		format: 'esm',
 		logLevel: 'error',
-		entryPoints: [resolveApp('_client.jsx')],
+		entryPoints: [...dir],
 		outdir: resolveBuild(),
 		splitting: true,
 		write: true
@@ -173,12 +180,22 @@ async function buildClient(clientEntryPoints) {
 				const key = file.path + exp.n;
 
 				CLIENT_COMPONENT_MAP[key] = {
+					// Have the browser import your component from your server
+					// at `/build/[component].js`
 					id: `/build/${relative(resolveBuild(), file.path)}`,
+					// Use the detected export name
 					name: exp.n,
+					// Turn off chunks. This is webpack-specific
 					chunks: [],
+					// Use an async import for the built resource in the browser
 					async: true
 				};
 
+				// Tag each component export with a special `react.client.reference` type
+				// and the map key to look up import information.
+				// This tells your stream renderer to avoid rendering the
+				// client component server-side. Instead, import the built component
+				// client-side at `clientComponentMap[key].id`
 				newContents += `
 ${exp.ln}.$$id = ${JSON.stringify(key)};
 ${exp.ln}.$$typeof = Symbol.for("react.client.reference");
@@ -210,7 +227,7 @@ async function createRoutes() {
         </head>
         <body>
             <div id="root"></div>
-            <script type="module" src="/build/_client.js"></script>
+            <script type="module" src="/build/${dir}/_client.js"></script>
         </body>
         </html>
         `);
