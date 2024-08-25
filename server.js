@@ -8,7 +8,6 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { parse } from 'es-module-lexer';
 import path, { relative } from 'node:path';
 import { sassPlugin } from 'esbuild-sass-plugin';
-import { renderSync } from 'sass';
 import {
 	getDirectories,
 	getDirectoriesPath,
@@ -128,9 +127,8 @@ async function buildClient(clientEntryPoints) {
 			logLevel: 'error',
 			entryPoints: [entry],
 			outdir,
-			splitting: true,
+			splitting: false,
 			write: false,
-			platform: 'browser',
 			plugins: [
 				sassPlugin() // Include the sassPlugin for client build
 			],
