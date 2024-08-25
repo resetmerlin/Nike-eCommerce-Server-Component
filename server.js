@@ -98,13 +98,13 @@ async function buildRSC() {
 
 /** Build client components */
 async function buildClient(clientEntryPoints) {
-	const directories = await getDirectoriesPath(resolveApp(''));
+	const directoriesInsideAppDir = await getDirectoriesPath(resolveApp(''));
 
-	const bundleDir = directories.map((dir) => {
-		const relativeEntryPoint = dir + '/_client.jsx';
+	const bundleDir = directoriesInsideAppDir.map((dir) => {
+		const bundleLocation = dir + '/_client.jsx';
 
 		return {
-			entry: relativeEntryPoint,
+			entry: bundleLocation,
 			// @ts-ignore
 			outdir: resolveBuild(path.relative(ROOT_DIRECTORY, dir.split('/').pop()))
 		};
@@ -128,8 +128,9 @@ async function buildClient(clientEntryPoints) {
 			logLevel: 'error',
 			entryPoints: [entry],
 			outdir,
-			splitting: false,
+			splitting: true,
 			write: false,
+			platform: 'browser',
 			plugins: [
 				sassPlugin() // Include the sassPlugin for client build
 			],
@@ -139,11 +140,15 @@ async function buildClient(clientEntryPoints) {
 			}
 		});
 
-		[...outputFiles].forEach(async (file) => {
+		outputFiles.forEach(async (file) => {
+			// Parse file export names
 			const [, exports] = parse(file.text);
 			let newContents = file.text;
 
 			for (const exp of exports) {
+				// Create a unique lookup key for each exported component.
+				// Could be any identifier!
+				// We'll choose the file path + export name for simplicity.
 				const key = file.path + exp.n;
 
 				CLIENT_COMPONENT_MAP[key] = {
@@ -164,15 +169,15 @@ async function buildClient(clientEntryPoints) {
 				// client component server-side. Instead, import the built component
 				// client-side at `clientComponentMap[key].id`
 				newContents += `
-${exp.ln}.$$id = ${JSON.stringify(key)};
-${exp.ln}.$$typeof = Symbol.for("react.client.reference");
-			`;
+	${exp.ln}.$$id = ${JSON.stringify(key)};
+	${exp.ln}.$$typeof = Symbol.for("react.client.reference");
+				`;
 			}
-
 			await writeFile(file.path, newContents);
 		});
 	}
 }
+
 // Function to build client and server bundles
 async function build() {
 	const { clientEntryPoints } = await buildRSC();
@@ -223,7 +228,7 @@ async function startServer() {
 	serve(
 		{
 			fetch: app.fetch,
-			port: 8930
+			port: 8910
 		},
 		(info) => {
 			console.log(`Listening on http://localhost:${info.port}`);
