@@ -1,0 +1,22 @@
+.card-lists {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	width: 75rem;
+
+	@media (max-width: 75em) {
+		//1200px
+
+		transform: scale(0.8);
+	}
+	@media (max-width: 37.5em) {
+		//600px
+		transform: scale(0.6);
+	}
+	@media (max-width: 30em) {
+		//480px
+		transform: scale(0.5);
+		position: absolute;
+		left: -25%;
+	}
+}

@@ -1,0 +1,60 @@
+.button {
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex-direction: column;
+}
+// Button Size
+.button-s {
+	height: 3rem;
+	width: 3rem;
+}
+.button-m {
+	height: 3.5rem;
+	width: 100%;
+}
+.button-l {
+	height: 15rem;
+	width: 15rem;
+}
+.button-xl {
+	height: 3.5rem;
+	width: 100%;
+}
+
+.button-xxl {
+	height: 15rem;
+	width: 35rem;
+}
+// Button Color
+.button-primary {
+	background-color: black;
+	border: 2px solid black;
+	color: white;
+}
+.button-secondary {
+	background-color: white;
+	border: 2px solid black;
+	color: black;
+}
+
+// Button Shape
+.button-normal {
+	border-radius: 6px;
+}
+
+.button-round {
+	border-radius: 50%;
+}
+
+.button-rect {
+	border-radius: 0%;
+}
+
+.button-none {
+	height: auto;
+	width: auto;
+	background-color: transparent;
+	border: none;
+}
