@@ -1,40 +1,29 @@
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { build as esbuild } from 'esbuild';
-import { fileURLToPath } from 'node:url';
 import { createElement } from 'react';
 import { serveStatic } from '@hono/node-server/serve-static';
 import * as ReactServerDom from 'react-server-dom-webpack/server.browser';
 import { readFile, writeFile } from 'node:fs/promises';
 import { parse } from 'es-module-lexer';
-import { relative } from 'node:path';
+import path, { relative } from 'node:path';
 import { sassPlugin } from 'esbuild-sass-plugin';
-import { readdir } from 'fs/promises';
+import { renderSync } from 'sass';
+import {
+	getDirectories,
+	getDirectoriesPath,
+	resolveApp,
+	resolveBuild,
+	resolveCreateBuild
+} from './utils.js';
 
 const app = new Hono();
-const clientComponentMap = {};
+const CLIENT_COMPONENT_MAP = {};
+const ROOT_DIRECTORY = process.cwd();
+const REACT_COMPONENT_REGEX = /\.jsx$/;
 
-// Utility functions to resolve paths
-const appDir = new URL('./app/', import.meta.url);
-const buildDir = new URL('./build/', import.meta.url);
-
-function resolveApp(path = '') {
-	return fileURLToPath(new URL(path, appDir));
-}
-
-function resolveBuild(path = '') {
-	return fileURLToPath(new URL(path, buildDir));
-}
-
-const reactComponentRegex = /\.jsx$/;
-
-async function getDirectories(source) {
-	const dirents = await readdir(source, { withFileTypes: true });
-	return dirents.filter((dirent) => dirent.isDirectory()).map((dirent) => dirent.name);
-}
-
-// Function to build client and server bundles
-async function build() {
+/** Build Server Components and Add lists of client components */
+async function buildRSC() {
 	const clientEntryPoints = new Set();
 	const directories = await getDirectories(resolveApp(''));
 
@@ -51,60 +40,148 @@ async function build() {
 				{
 					name: 'resolve-client-imports',
 					setup(build) {
-						build.onResolve({ filter: reactComponentRegex }, async ({ path: relativePath }) => {
-							const path = resolveApp(relativePath);
-							const contents = await readFile(path, 'utf-8');
+						build.onResolve(
+							{ filter: REACT_COMPONENT_REGEX },
+							async ({ path: relativePath, importer }) => {
+								if (relativePath.endsWith('.scss')) {
+									return { external: true }; // Skip processing .scss files
+								}
 
-							if (contents.startsWith("'use client'")) {
-								clientEntryPoints.add(path);
+								/**
+								 * if the path starts with relative path, change it into absolute path
+								 * @example
+								 * ../../components/Product/index.jsx
+								 * // into
+								 * yourRootDir/components/Product/index.jsx
+								 */
+								const absolutePath = relativePath.startsWith('.')
+									? path.resolve(path.dirname(importer), relativePath)
+									: resolveApp(relativePath);
+
+								const contents = await readFile(absolutePath, 'utf-8');
+
+								/**
+								 * Get relative entry points based on the root directory and absolute directory
+								 * @example
+								 * yourRootDir/components/Product/index.jsx
+								 * // into
+								 * components/Product/index.jsx
+								 *
+								 */
+								const entryDirLists = path.relative(ROOT_DIRECTORY, absolutePath);
+
+								// Needs to bundle client component and server component separately. so add client components path to build later
+
+								if (!contents.startsWith("'use client'")) return; // check it is not client component or not
+
+								clientEntryPoints.add(absolutePath);
+								// check is client component is outside of server component, ex: components/Product/index.jsx
 								return {
 									external: true,
-									path: relativePath.replace(reactComponentRegex, '.js')
+									// change import path into build components path ex: /home/resetmerlin/UbuntuCodeRepo/Nike-eCommerce-Server-Component/build/components/Product/index.js
+									path: resolveBuild(entryDirLists).replace(REACT_COMPONENT_REGEX, '.js')
 								};
 							}
-						});
+						);
 					}
 				},
 				sassPlugin()
 			],
 			loader: {
-				'.png': 'file' // Loader for images
+				'.png': 'file'
 			}
 		});
 	}
 
-	// Build client components
-	const { outputFiles } = await esbuild({
-		bundle: true,
-		format: 'esm',
-		logLevel: 'error',
-		entryPoints: [resolveApp('_client.jsx'), ...clientEntryPoints],
-		outdir: resolveBuild(),
-		splitting: true,
-		write: false
+	return { clientEntryPoints };
+}
+
+/** Build client components */
+async function buildClient(clientEntryPoints) {
+	const directoriesInsideAppDir = await getDirectoriesPath(resolveApp(''));
+
+	const bundleDir = directoriesInsideAppDir.map((dir) => {
+		const bundleLocation = dir + '/_client.jsx';
+
+		return {
+			entry: bundleLocation,
+			// @ts-ignore
+			outdir: resolveBuild(path.relative(ROOT_DIRECTORY, dir.split('/').pop()))
+		};
 	});
 
-	// Update client component map with references
-	for (let file of outputFiles) {
-		const [, exports] = parse(file.text);
-		let newContents = file.text;
+	const clientsComponentDir = [...clientEntryPoints].map((entry) => {
+		const relativeEntryPoint = path.relative(ROOT_DIRECTORY, entry);
 
-		for (const exp of exports) {
-			const key = file.path + exp.n;
-			clientComponentMap[key] = {
-				id: `/build/${relative(resolveBuild(), file.path)}`,
-				name: exp.n,
-				chunks: [],
-				async: true
-			};
+		const fullPath = relativeEntryPoint.split('/');
 
-			newContents += `
-${exp.ln}.$$id = ${JSON.stringify(key)};
-${exp.ln}.$$typeof = Symbol.for("react.client.reference");
-            `;
-		}
-		await writeFile(file.path, newContents);
+		// hard coding
+		if (relativeEntryPoint.endsWith('.jsx')) fullPath.pop();
+
+		return { entry, outdir: resolveCreateBuild(fullPath.join('/')) };
+	});
+
+	for (const { entry, outdir } of [...bundleDir, ...clientsComponentDir]) {
+		const { outputFiles } = await esbuild({
+			bundle: true,
+			format: 'esm',
+			logLevel: 'error',
+			entryPoints: [entry],
+			outdir,
+			splitting: true,
+			write: false,
+			platform: 'browser',
+			plugins: [
+				sassPlugin() // Include the sassPlugin for client build
+			],
+			loader: {
+				'.jsx': 'jsx', // Ensuring that .jsx files are handled correctly
+				'.scss': 'css' // Ensuring that .scss files are handled correctly
+			}
+		});
+
+		outputFiles.forEach(async (file) => {
+			// Parse file export names
+			const [, exports] = parse(file.text);
+			let newContents = file.text;
+
+			for (const exp of exports) {
+				// Create a unique lookup key for each exported component.
+				// Could be any identifier!
+				// We'll choose the file path + export name for simplicity.
+				const key = file.path + exp.n;
+
+				CLIENT_COMPONENT_MAP[key] = {
+					// Have the browser import your component from your server
+					// at `/build/[component].js`
+					id: `/build/${relative(resolveBuild(), file.path)}`,
+					// Use the detected export name
+					name: exp.n,
+					// Turn off chunks. This is webpack-specific
+					chunks: [],
+					// Use an async import for the built resource in the browser
+					async: true
+				};
+
+				// Tag each component export with a special `react.client.reference` type
+				// and the map key to look up import information.
+				// This tells your stream renderer to avoid rendering the
+				// client component server-side. Instead, import the built component
+				// client-side at `clientComponentMap[key].id`
+				newContents += `
+	${exp.ln}.$$id = ${JSON.stringify(key)};
+	${exp.ln}.$$typeof = Symbol.for("react.client.reference");
+				`;
+			}
+			await writeFile(file.path, newContents);
+		});
 	}
+}
+
+// Function to build client and server bundles
+async function build() {
+	const { clientEntryPoints } = await buildRSC();
+	await buildClient(clientEntryPoints);
 }
 
 // Function to dynamically create routes based on the directories
@@ -122,7 +199,7 @@ async function createRoutes() {
         </head>
         <body>
             <div id="root"></div>
-            <script type="module" src="/build/_client.js"></script>
+            <script type="module" src="/build/${dir}/_client.js"></script>
         </body>
         </html>
         `);
@@ -133,7 +210,7 @@ async function createRoutes() {
 			const Page = await import(`./build/${dir}/page.js`);
 			const Comp = createElement(Page.default);
 
-			const stream = ReactServerDom.renderToReadableStream(Comp, clientComponentMap);
+			const stream = ReactServerDom.renderToReadableStream(Comp, CLIENT_COMPONENT_MAP);
 			return new Response(stream);
 		});
 	}
@@ -151,7 +228,7 @@ async function startServer() {
 	serve(
 		{
 			fetch: app.fetch,
-			port: 8787
+			port: 8910
 		},
 		(info) => {
 			console.log(`Listening on http://localhost:${info.port}`);

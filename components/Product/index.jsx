@@ -1,3 +1,5 @@
+'use client';
+
 import Header from '../shared/Header';
 import ChildTemplate from '../shared/templates/ChildTemplate';
 import ParentTemplate from '../shared/templates/ParentTemplate';
