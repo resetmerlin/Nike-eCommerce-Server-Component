@@ -21,9 +21,65 @@ const CLIENT_COMPONENT_MAP = {};
 const ROOT_DIRECTORY = process.cwd();
 const REACT_COMPONENT_REGEX = /\.jsx$/;
 
+// Function to dynamically create routes based on the directories
+async function createRoutes() {
+	const directories = await getDirectories(resolveApp(''));
+
+	for (let dir of directories) {
+		app.get(`/${dir}`, async (c) => {
+			return c.html(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>${dir} - My Website</title>
+            <link rel="stylesheet" href="/build/${dir}/page.css">
+        </head>
+        <body>
+            <div id="root"></div>
+            <script type="module" src="/build/app/product/_client.js"></script>
+        </body>
+        </html>
+        `);
+		});
+
+		// Endpoint to render the server component to a stream
+		app.get(`/rsc/${dir}`, async (c) => {
+			const Page = await import(`./build/${dir}/page.js`);
+			const Comp = createElement(Page.default);
+
+			const stream = ReactServerDom.renderToReadableStream(Comp, CLIENT_COMPONENT_MAP);
+			return new Response(stream);
+		});
+	}
+}
+
+// Serve static assets from 'build' and 'public' directories
+app.use('/build/*', serveStatic());
+app.use('/*', serveStatic({ root: './public' }));
+
+// Initialize and start the server
+async function startServer() {
+	await build();
+	await createRoutes();
+
+	serve(
+		{
+			fetch: app.fetch,
+			port: 8912
+		},
+		(info) => {
+			console.log(`Listening on http://localhost:${info.port}`);
+		}
+	);
+}
+
+startServer().catch((err) => {
+	console.error('Failed to start the server:', err);
+});
+
 /** Build Server Components and Add lists of client components */
 async function buildRSC() {
-	const clientEntryPoints = new Set();
+	const clientEntryPoints = new Map();
 	const directories = await getDirectories(resolveApp(''));
 
 	for (let dir of directories) {
@@ -73,7 +129,13 @@ async function buildRSC() {
 
 								if (!contents.startsWith("'use client'")) return; // check it is not client component or not
 
-								clientEntryPoints.add(absolutePath);
+								if (!clientEntryPoints.has(dir)) {
+									// If the key does not exist, initialize it with an empty array
+									clientEntryPoints.set(dir, []);
+								}
+								// Push the new value to the existing array
+								clientEntryPoints.get(dir).push(absolutePath);
+
 								// check is client component is outside of server component, ex: components/Product/index.jsx
 								return {
 									external: true,
@@ -97,37 +159,18 @@ async function buildRSC() {
 
 /** Build client components */
 async function buildClient(clientEntryPoints) {
-	const directoriesInsideAppDir = await getDirectoriesPath(resolveApp(''));
+	for (const pageEntryPoint of clientEntryPoints.keys()) {
+		const bundleDir = `${pageEntryPoint}/_client.jsx`;
 
-	const bundleDir = directoriesInsideAppDir.map((dir) => {
-		const bundleLocation = dir + '/_client.jsx';
+		const entryPoints = [resolveApp(bundleDir), ...clientEntryPoints.get(pageEntryPoint)];
 
-		return {
-			entry: bundleLocation,
-			// @ts-ignore
-			outdir: resolveBuild(path.relative(ROOT_DIRECTORY, dir.split('/').pop()))
-		};
-	});
-
-	const clientsComponentDir = [...clientEntryPoints].map((entry) => {
-		const relativeEntryPoint = path.relative(ROOT_DIRECTORY, entry);
-
-		const fullPath = relativeEntryPoint.split('/');
-
-		// hard coding
-		if (relativeEntryPoint.endsWith('.jsx')) fullPath.pop();
-
-		return { entry, outdir: resolveCreateBuild(fullPath.join('/')) };
-	});
-
-	for (const { entry, outdir } of [...bundleDir, ...clientsComponentDir]) {
 		const { outputFiles } = await esbuild({
 			bundle: true,
 			format: 'esm',
 			logLevel: 'error',
-			entryPoints: [entry],
-			outdir,
-			splitting: false,
+			entryPoints,
+			outdir: resolveBuild(),
+			splitting: true,
 			write: false,
 			plugins: [
 				sassPlugin() // Include the sassPlugin for client build
@@ -181,59 +224,3 @@ async function build() {
 	const { clientEntryPoints } = await buildRSC();
 	await buildClient(clientEntryPoints);
 }
-
-// Function to dynamically create routes based on the directories
-async function createRoutes() {
-	const directories = await getDirectories(resolveApp(''));
-
-	for (let dir of directories) {
-		app.get(`/${dir}`, async (c) => {
-			return c.html(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>${dir} - My Website</title>
-            <link rel="stylesheet" href="/build/${dir}/page.css">
-        </head>
-        <body>
-            <div id="root"></div>
-            <script type="module" src="/build/${dir}/_client.js"></script>
-        </body>
-        </html>
-        `);
-		});
-
-		// Endpoint to render the server component to a stream
-		app.get(`/rsc/${dir}`, async (c) => {
-			const Page = await import(`./build/${dir}/page.js`);
-			const Comp = createElement(Page.default);
-
-			const stream = ReactServerDom.renderToReadableStream(Comp, CLIENT_COMPONENT_MAP);
-			return new Response(stream);
-		});
-	}
-}
-
-// Serve static assets from 'build' and 'public' directories
-app.use('/build/*', serveStatic());
-app.use('/*', serveStatic({ root: './public' }));
-
-// Initialize and start the server
-async function startServer() {
-	await build();
-	await createRoutes();
-
-	serve(
-		{
-			fetch: app.fetch,
-			port: 8910
-		},
-		(info) => {
-			console.log(`Listening on http://localhost:${info.port}`);
-		}
-	);
-}
-
-startServer().catch((err) => {
-	console.error('Failed to start the server:', err);
-});
