@@ -8,13 +8,8 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { parse } from 'es-module-lexer';
 import path, { relative } from 'node:path';
 import { sassPlugin } from 'esbuild-sass-plugin';
-import {
-	getDirectories,
-	getDirectoriesPath,
-	resolveApp,
-	resolveBuild,
-	resolveCreateBuild
-} from './utils.js';
+import { getDirectories, resolveApp, resolveBuild, resolveCreateBuild } from './utils.js';
+import { copyFile } from 'node:fs';
 
 const app = new Hono();
 const CLIENT_COMPONENT_MAP = {};
@@ -36,7 +31,7 @@ async function createRoutes() {
         </head>
         <body>
             <div id="root"></div>
-            <script type="module" src="/build/app/product/_client.js"></script>
+            <script type="module" src="/build/${dir}/_client.js"></script>
         </body>
         </html>
         `);
@@ -65,7 +60,7 @@ async function startServer() {
 	serve(
 		{
 			fetch: app.fetch,
-			port: 8912
+			port: 8980
 		},
 		(info) => {
 			console.log(`Listening on http://localhost:${info.port}`);
@@ -162,7 +157,55 @@ async function buildClient(clientEntryPoints) {
 	for (const pageEntryPoint of clientEntryPoints.keys()) {
 		const bundleDir = `${pageEntryPoint}/_client.jsx`;
 
-		const entryPoints = [resolveApp(bundleDir), ...clientEntryPoints.get(pageEntryPoint)];
+		const code = `
+import { createRoot } from 'react-dom/client';
+import { createFromFetch } from 'react-server-dom-webpack/client';
+
+// HACK: map webpack resolution to native ESM
+// @ts-expect-error Property '__webpack_require__' does not exist on type 'Window & typeof globalThis'.
+window.__webpack_require__ = async (id) => {
+    return import(id);
+};
+
+// @ts-expect-error \`root\` might be null
+const root = createRoot(document.getElementById('root'));
+
+// Construct the fetch URL for the server component stream
+const fetchUrl = \`/rsc/${pageEntryPoint}\`;
+
+/**
+ * Fetch your server component stream from \`/rsc/[route]\`
+ * and render results into the root element as they come in.
+ */
+createFromFetch(fetch(fetchUrl)).then((comp) => {
+    root.render(comp);
+});
+`;
+
+		writeFile(resolveBuild(bundleDir), code);
+
+		const clientEntryLists = clientEntryPoints.get(pageEntryPoint).map(async (entry) => {
+			const destDir = resolveCreateBuild(path.relative(ROOT_DIRECTORY, entry));
+			const tmep = destDir.split('/');
+
+			tmep.pop();
+
+			const dest = path.join(tmep.join('/'), path.basename(entry));
+
+			copyFile(entry, destDir, (err) => {
+				if (err) {
+					console.error('Error copying the file:', err);
+				} else {
+					console.log('File copied successfully to:', resolveBuild(entry));
+				}
+			});
+
+			await copyAndFixImports(entry, dest);
+
+			return dest;
+		});
+
+		const entryPoints = [resolveBuild(bundleDir), ...(await Promise.all(clientEntryLists))];
 
 		const { outputFiles } = await esbuild({
 			bundle: true,
@@ -223,4 +266,32 @@ async function buildClient(clientEntryPoints) {
 async function build() {
 	const { clientEntryPoints } = await buildRSC();
 	await buildClient(clientEntryPoints);
+}
+
+// Function to copy a file and update import paths
+async function copyAndFixImports(src, dest) {
+	try {
+		// Read the source file
+		let content = await readFile(src, 'utf-8');
+
+		// Update import paths
+		content = content.replace(/import\s+.*?from\s+['"](.*?)['"]/g, (match, importPath) => {
+			// Resolve the absolute path of the import
+			const resolvedPath = path.resolve(path.dirname(src), importPath);
+
+			// Get the relative path from the destination file to the resolved import path
+			const relativePath = path.relative(path.dirname(dest), resolvedPath);
+
+			// Convert to a relative import path that can be used in the new location
+			const updatedImportPath = relativePath.startsWith('.') ? relativePath : `./${relativePath}`;
+
+			return match.replace(importPath, updatedImportPath);
+		});
+
+		// Write the updated content to the destination file
+		await writeFile(dest, content, 'utf-8');
+		console.log(`File copied and imports updated: ${dest}`);
+	} catch (err) {
+		console.error(`Error copying and updating imports for ${src}:`, err);
+	}
 }
