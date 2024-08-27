@@ -1,0 +1,13 @@
+{
+	"plugins": ["import"],
+	"rules": {
+		"import/no-relative-parent-imports": "error"
+	},
+	"settings": {
+		"import/resolver": {
+			"node": {
+				"paths": ["components"]
+			}
+		}
+	}
+}
