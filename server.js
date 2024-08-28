@@ -4,12 +4,13 @@ import { build as esbuild } from 'esbuild';
 import { createElement } from 'react';
 import { serveStatic } from '@hono/node-server/serve-static';
 import * as ReactServerDom from 'react-server-dom-webpack/server.browser';
-import { readFile, writeFile } from 'node:fs/promises';
+import { copyFile, readFile, unlink, writeFile } from 'node:fs/promises';
 import { parse } from 'es-module-lexer';
 import path, { relative } from 'node:path';
 import { sassPlugin } from 'esbuild-sass-plugin';
 import { getDirectories, resolveApp, resolveBuild, resolveCreateBuild } from './utils.js';
-import fs from 'fs-extra';
+import { mkdir } from 'node:fs/promises';
+import { rmSync } from 'node:fs';
 
 const app = new Hono();
 const CLIENT_COMPONENT_MAP = {};
@@ -72,8 +73,16 @@ startServer().catch((err) => {
 	console.error('Failed to start the server:', err);
 });
 
-/** Build Server Components and Add lists of client components */
+/**
+ *
+ * 	@todo Need to care about edge case like app/page.jsx instead of app/randomFolder/page.jsx
+ *  @description Build Server Components and Add lists of client components
+ *
+ * */
 async function buildRSC() {
+	/**
+	 * Get all the folder that inside of app directory
+	 */
 	const directories = await getDirectories(resolveApp(''));
 
 	for (let dir of directories) {
@@ -82,8 +91,8 @@ async function buildRSC() {
 			bundle: true,
 			format: 'esm',
 			logLevel: 'error',
-			entryPoints: [resolveApp(`${dir}/page.jsx`)],
-			outdir: resolveBuild(dir),
+			entryPoints: [resolveApp(`${dir}/page.jsx`)], // app/yourFolder/page.jsx
+			outdir: resolveBuild(dir), // build/yourFoldr insstead of build/app/yourFolder
 			packages: 'external',
 			plugins: [
 				{
@@ -164,53 +173,49 @@ async function buildClient() {
 		const bundleDir = `${pageEntryPoint}/_client.jsx`;
 
 		const code = `
-import { createRoot } from 'react-dom/client';
-import { createFromFetch } from 'react-server-dom-webpack/client';
+			import { createRoot } from 'react-dom/client';
+			import { createFromFetch } from 'react-server-dom-webpack/client';
 
-// HACK: map webpack resolution to native ESM
-// @ts-expect-error Property '__webpack_require__' does not exist on type 'Window & typeof globalThis'.
-window.__webpack_require__ = async (id) => {
-    return import(id);
-};
+			// HACK: map webpack resolution to native ESM
+			// @ts-expect-error Property '__webpack_require__' does not exist on type 'Window & typeof globalThis'.
+			window.__webpack_require__ = async (id) => {
+				return import(id);
+			};
 
-// @ts-expect-error \`root\` might be null
-const root = createRoot(document.getElementById('root'));
+			// @ts-expect-error \`root\` might be null
+			const root = createRoot(document.getElementById('root'));
 
-// Construct the fetch URL for the server component stream
-const fetchUrl = \`/rsc/${pageEntryPoint}\`;
+			// Construct the fetch URL for the server component stream
+			const fetchUrl = \`/rsc/${pageEntryPoint}\`;
 
-/**
- * Fetch your server component stream from \`/rsc/[route]\`
- * and render results into the root element as they come in.
- */
-createFromFetch(fetch(fetchUrl)).then((comp) => {
-    root.render(comp);
-});
-`;
-
-		writeFile(resolveBuild(bundleDir), code);
+			/**
+			 * Fetch your server component stream from \`/rsc/[route]\`
+			 * and render results into the root element as they come in.
+			 */
+			createFromFetch(fetch(fetchUrl)).then((comp) => {
+				root.render(comp);
+			});
+		`;
 
 		const clientEntryLists = clientEntryPoints.get(pageEntryPoint).map(async (entry) => {
-			if (entry === 'RSC') return undefined;
+			if (entry === 'RSC') {
+				writeFile(resolveBuild(bundleDir), code);
+				return undefined;
+			}
 
-			const destDir = path.relative(ROOT_DIRECTORY, entry);
-			const tmep = destDir.split('/');
+			const destDir = path.relative(ROOT_DIRECTORY, entry).split('/');
 
-			tmep.pop();
+			const fileName = destDir.pop() ?? '';
 
-			const dest = resolveCreateBuild(path.join(tmep.join('/')));
+			const dest = resolveCreateBuild(destDir.join('/'));
 
-			fs.copy(entry, dest, (err) => {
-				if (err) {
-					console.error('Error copying the file:', err);
-				} else {
-					console.log('File copied successfully to:', resolveBuild(entry));
-				}
-			});
+			const lastDir = path.join(dest, fileName);
 
-			await copyAndFixImports(entry, dest);
+			await copyFile(entry, lastDir);
 
-			return dest;
+			await copyAndFixImports(entry, lastDir);
+
+			return lastDir;
 		});
 
 		const entryPoints = [resolveBuild(bundleDir), ...(await Promise.all(clientEntryLists))].filter(
@@ -298,7 +303,14 @@ async function copyAndFixImports(src, dest) {
 			return match.replace(importPath, updatedImportPath);
 		});
 
+		// Ensure the destination directory exists
+		const destDir = path.dirname(dest);
+		await mkdir(destDir, { recursive: true });
+
 		// Write the updated content to the destination file
 		await writeFile(dest, content, 'utf-8');
-	} catch (err) {}
+		console.log(`File successfully written to ${dest}`);
+	} catch (err) {
+		console.error(`Error writing file to ${dest}:`, err);
+	}
 }
