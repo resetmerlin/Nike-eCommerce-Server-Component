@@ -9,10 +9,11 @@ import { parse } from 'es-module-lexer';
 import path, { relative } from 'node:path';
 import { sassPlugin } from 'esbuild-sass-plugin';
 import { getDirectories, resolveApp, resolveBuild, resolveCreateBuild } from './utils.js';
-import { copyFile } from 'node:fs';
+import fs from 'fs-extra';
 
 const app = new Hono();
 const CLIENT_COMPONENT_MAP = {};
+const clientEntryPoints = new Map();
 const ROOT_DIRECTORY = process.cwd();
 const REACT_COMPONENT_REGEX = /\.jsx$/;
 
@@ -23,18 +24,17 @@ async function createRoutes() {
 	for (let dir of directories) {
 		app.get(`/${dir}`, async (c) => {
 			return c.html(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>${dir} - My Website</title>
-            <link rel="stylesheet" href="/build/${dir}/page.css">
-        </head>
-        <body>
-            <div id="root"></div>
-            <script type="module" src="/build/${dir}/_client.js"></script>
-        </body>
-        </html>
-        `);
+				<!DOCTYPE html>
+				<html>
+				<head>
+					<title>${dir} - My Website</title>
+					<link rel="stylesheet" href="/build/${dir}/page.css">
+				</head>
+				<body>
+					<div id="root"></div>
+<script type="module" src="/build/${dir}/_client.js"></script>				</body>
+				</html>
+			`);
 		});
 
 		// Endpoint to render the server component to a stream
@@ -60,7 +60,7 @@ async function startServer() {
 	serve(
 		{
 			fetch: app.fetch,
-			port: 8980
+			port: 8981
 		},
 		(info) => {
 			console.log(`Listening on http://localhost:${info.port}`);
@@ -74,7 +74,6 @@ startServer().catch((err) => {
 
 /** Build Server Components and Add lists of client components */
 async function buildRSC() {
-	const clientEntryPoints = new Map();
 	const directories = await getDirectories(resolveApp(''));
 
 	for (let dir of directories) {
@@ -122,7 +121,16 @@ async function buildRSC() {
 
 								// Needs to bundle client component and server component separately. so add client components path to build later
 
-								if (!contents.startsWith("'use client'")) return; // check it is not client component or not
+								if (!contents.startsWith("'use client'")) {
+									if (!clientEntryPoints.has(dir)) {
+										// If the key does not exist, initialize it with an empty array
+										clientEntryPoints.set(dir, []);
+									}
+									// Push the new value to the existing array
+									clientEntryPoints.get(dir).push('RSC');
+
+									return; // check it is not client component or not
+								}
 
 								if (!clientEntryPoints.has(dir)) {
 									// If the key does not exist, initialize it with an empty array
@@ -185,14 +193,16 @@ createFromFetch(fetch(fetchUrl)).then((comp) => {
 		writeFile(resolveBuild(bundleDir), code);
 
 		const clientEntryLists = clientEntryPoints.get(pageEntryPoint).map(async (entry) => {
-			const destDir = resolveCreateBuild(path.relative(ROOT_DIRECTORY, entry));
+			if (entry === 'RSC') return undefined;
+
+			const destDir = path.relative(ROOT_DIRECTORY, entry);
 			const tmep = destDir.split('/');
 
 			tmep.pop();
 
-			const dest = path.join(tmep.join('/'), path.basename(entry));
+			const dest = resolveCreateBuild(path.join(tmep.join('/')));
 
-			copyFile(entry, destDir, (err) => {
+			fs.copy(entry, dest, (err) => {
 				if (err) {
 					console.error('Error copying the file:', err);
 				} else {
@@ -205,7 +215,9 @@ createFromFetch(fetch(fetchUrl)).then((comp) => {
 			return dest;
 		});
 
-		const entryPoints = [resolveBuild(bundleDir), ...(await Promise.all(clientEntryLists))];
+		const entryPoints = [resolveBuild(bundleDir), ...(await Promise.all(clientEntryLists))].filter(
+			Boolean
+		);
 
 		const { outputFiles } = await esbuild({
 			bundle: true,
@@ -290,8 +302,5 @@ async function copyAndFixImports(src, dest) {
 
 		// Write the updated content to the destination file
 		await writeFile(dest, content, 'utf-8');
-		console.log(`File copied and imports updated: ${dest}`);
-	} catch (err) {
-		console.error(`Error copying and updating imports for ${src}:`, err);
-	}
+	} catch (err) {}
 }
