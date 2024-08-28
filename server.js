@@ -156,12 +156,10 @@ async function buildRSC() {
 			}
 		});
 	}
-
-	return { clientEntryPoints };
 }
 
 /** Build client components */
-async function buildClient(clientEntryPoints) {
+async function buildClient() {
 	for (const pageEntryPoint of clientEntryPoints.keys()) {
 		const bundleDir = `${pageEntryPoint}/_client.jsx`;
 
@@ -276,8 +274,8 @@ createFromFetch(fetch(fetchUrl)).then((comp) => {
 
 // Function to build client and server bundles
 async function build() {
-	const { clientEntryPoints } = await buildRSC();
-	await buildClient(clientEntryPoints);
+	await buildRSC();
+	await buildClient();
 }
 
 // Function to copy a file and update import paths
