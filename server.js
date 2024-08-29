@@ -4,27 +4,85 @@ import { build as esbuild } from 'esbuild';
 import { createElement } from 'react';
 import { serveStatic } from '@hono/node-server/serve-static';
 import * as ReactServerDom from 'react-server-dom-webpack/server.browser';
-import { readFile, writeFile } from 'node:fs/promises';
+import { copyFile, readFile, unlink, writeFile } from 'node:fs/promises';
 import { parse } from 'es-module-lexer';
 import path, { relative } from 'node:path';
 import { sassPlugin } from 'esbuild-sass-plugin';
-import { renderSync } from 'sass';
-import {
-	getDirectories,
-	getDirectoriesPath,
-	resolveApp,
-	resolveBuild,
-	resolveCreateBuild
-} from './utils.js';
+import { getDirectories, resolveApp, resolveBuild, resolveCreateBuild } from './utils.js';
+import { mkdir } from 'node:fs/promises';
+import { rmSync } from 'node:fs';
 
 const app = new Hono();
 const CLIENT_COMPONENT_MAP = {};
+const clientEntryPoints = new Map();
 const ROOT_DIRECTORY = process.cwd();
 const REACT_COMPONENT_REGEX = /\.jsx$/;
 
-/** Build Server Components and Add lists of client components */
+// Function to dynamically create routes based on the directories
+async function createRoutes() {
+	const directories = await getDirectories(resolveApp(''));
+
+	for (let dir of directories) {
+		app.get(`/${dir}`, async (c) => {
+			return c.html(`
+				<!DOCTYPE html>
+				<html>
+				<head>
+					<title>${dir} - My Website</title>
+					<link rel="stylesheet" href="/build/${dir}/page.css">
+				</head>
+				<body>
+					<div id="root"></div>
+<script type="module" src="/build/${dir}/_client.js"></script>				</body>
+				</html>
+			`);
+		});
+
+		// Endpoint to render the server component to a stream
+		app.get(`/rsc/${dir}`, async (c) => {
+			const Page = await import(`./build/${dir}/page.js`);
+			const Comp = createElement(Page.default);
+
+			const stream = ReactServerDom.renderToReadableStream(Comp, CLIENT_COMPONENT_MAP);
+			return new Response(stream);
+		});
+	}
+}
+
+// Serve static assets from 'build' and 'public' directories
+app.use('/build/*', serveStatic());
+app.use('/*', serveStatic({ root: './public' }));
+
+// Initialize and start the server
+async function startServer() {
+	await build();
+	await createRoutes();
+
+	serve(
+		{
+			fetch: app.fetch,
+			port: 8982
+		},
+		(info) => {
+			console.log(`Listening on http://localhost:${info.port}`);
+		}
+	);
+}
+
+startServer().catch((err) => {
+	console.error('Failed to start the server:', err);
+});
+
+/**
+ *
+ * 	@todo Need to care about edge case like app/page.jsx instead of app/randomFolder/page.jsx
+ *  @description Build Server Components and Add lists of client components
+ *
+ * */
 async function buildRSC() {
-	const clientEntryPoints = new Set();
+	/**
+	 * Get all the folder that inside of app directory
+	 */
 	const directories = await getDirectories(resolveApp(''));
 
 	for (let dir of directories) {
@@ -33,8 +91,8 @@ async function buildRSC() {
 			bundle: true,
 			format: 'esm',
 			logLevel: 'error',
-			entryPoints: [resolveApp(`${dir}/page.jsx`)],
-			outdir: resolveBuild(dir),
+			entryPoints: [resolveApp(`${dir}/page.jsx`)], // app/yourFolder/page.jsx
+			outdir: resolveBuild(dir), // build/yourFoldr insstead of build/app/yourFolder
 			packages: 'external',
 			plugins: [
 				{
@@ -72,9 +130,24 @@ async function buildRSC() {
 
 								// Needs to bundle client component and server component separately. so add client components path to build later
 
-								if (!contents.startsWith("'use client'")) return; // check it is not client component or not
+								if (!contents.startsWith("'use client'")) {
+									if (!clientEntryPoints.has(dir)) {
+										// If the key does not exist, initialize it with an empty array
+										clientEntryPoints.set(dir, []);
+									}
+									// Push the new value to the existing array
+									clientEntryPoints.get(dir).push('RSC');
 
-								clientEntryPoints.add(absolutePath);
+									return; // check it is not client component or not
+								}
+
+								if (!clientEntryPoints.has(dir)) {
+									// If the key does not exist, initialize it with an empty array
+									clientEntryPoints.set(dir, []);
+								}
+								// Push the new value to the existing array
+								clientEntryPoints.get(dir).push(absolutePath);
+
 								// check is client component is outside of server component, ex: components/Product/index.jsx
 								return {
 									external: true,
@@ -92,45 +165,71 @@ async function buildRSC() {
 			}
 		});
 	}
-
-	return { clientEntryPoints };
 }
 
 /** Build client components */
-async function buildClient(clientEntryPoints) {
-	const directoriesInsideAppDir = await getDirectoriesPath(resolveApp(''));
+async function buildClient() {
+	for (const pageEntryPoint of clientEntryPoints.keys()) {
+		const bundleDir = `${pageEntryPoint}/_client.jsx`;
 
-	const bundleDir = directoriesInsideAppDir.map((dir) => {
-		const bundleLocation = dir + '/_client.jsx';
+		const code = `
+			import { createRoot } from 'react-dom/client';
+			import { createFromFetch } from 'react-server-dom-webpack/client';
 
-		return {
-			entry: bundleLocation,
-			// @ts-ignore
-			outdir: resolveBuild(path.relative(ROOT_DIRECTORY, dir.split('/').pop()))
-		};
-	});
+			// HACK: map webpack resolution to native ESM
+			// @ts-expect-error Property '__webpack_require__' does not exist on type 'Window & typeof globalThis'.
+			window.__webpack_require__ = async (id) => {
+				return import(id);
+			};
 
-	const clientsComponentDir = [...clientEntryPoints].map((entry) => {
-		const relativeEntryPoint = path.relative(ROOT_DIRECTORY, entry);
+			// @ts-expect-error \`root\` might be null
+			const root = createRoot(document.getElementById('root'));
 
-		const fullPath = relativeEntryPoint.split('/');
+			// Construct the fetch URL for the server component stream
+			const fetchUrl = \`/rsc/${pageEntryPoint}\`;
 
-		// hard coding
-		if (relativeEntryPoint.endsWith('.jsx')) fullPath.pop();
+			/**
+			 * Fetch your server component stream from \`/rsc/[route]\`
+			 * and render results into the root element as they come in.
+			 */
+			createFromFetch(fetch(fetchUrl)).then((comp) => {
+				root.render(comp);
+			});
+		`;
 
-		return { entry, outdir: resolveCreateBuild(fullPath.join('/')) };
-	});
+		const clientEntryLists = clientEntryPoints.get(pageEntryPoint).map(async (entry) => {
+			if (entry === 'RSC') {
+				writeFile(resolveBuild(bundleDir), code);
+				return undefined;
+			}
 
-	for (const { entry, outdir } of [...bundleDir, ...clientsComponentDir]) {
+			const destDir = path.relative(ROOT_DIRECTORY, entry).split('/');
+
+			const fileName = destDir.pop() ?? '';
+
+			const dest = resolveCreateBuild(destDir.join('/'));
+
+			const lastDir = path.join(dest, fileName);
+
+			await copyFile(entry, lastDir);
+
+			await copyAndFixImports(entry, lastDir);
+
+			return lastDir;
+		});
+
+		const entryPoints = [resolveBuild(bundleDir), ...(await Promise.all(clientEntryLists))].filter(
+			Boolean
+		);
+
 		const { outputFiles } = await esbuild({
 			bundle: true,
 			format: 'esm',
 			logLevel: 'error',
-			entryPoints: [entry],
-			outdir,
+			entryPoints,
+			outdir: entryPoints.length === 1 ? resolveBuild(pageEntryPoint) : resolveBuild(),
 			splitting: true,
 			write: false,
-			platform: 'browser',
 			plugins: [
 				sassPlugin() // Include the sassPlugin for client build
 			],
@@ -180,62 +279,37 @@ async function buildClient(clientEntryPoints) {
 
 // Function to build client and server bundles
 async function build() {
-	const { clientEntryPoints } = await buildRSC();
-	await buildClient(clientEntryPoints);
+	await buildRSC();
+	await buildClient();
 }
 
-// Function to dynamically create routes based on the directories
-async function createRoutes() {
-	const directories = await getDirectories(resolveApp(''));
+// Function to copy a file and update import paths
+async function copyAndFixImports(src, dest) {
+	try {
+		// Read the source file
+		let content = await readFile(src, 'utf-8');
 
-	for (let dir of directories) {
-		app.get(`/${dir}`, async (c) => {
-			return c.html(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>${dir} - My Website</title>
-            <link rel="stylesheet" href="/build/${dir}/page.css">
-        </head>
-        <body>
-            <div id="root"></div>
-            <script type="module" src="/build/${dir}/_client.js"></script>
-        </body>
-        </html>
-        `);
+		// Update import paths
+		content = content.replace(/import\s+.*?from\s+['"](.*?)['"]/g, (match, importPath) => {
+			// Resolve the absolute path of the import
+			const resolvedPath = path.resolve(path.dirname(src), importPath);
+
+			// Get the relative path from the destination file to the resolved import path
+			const relativePath = path.relative(path.dirname(dest), resolvedPath);
+
+			// Convert to a relative import path that can be used in the new location
+			const updatedImportPath = relativePath.startsWith('.') ? relativePath : `./${relativePath}`;
+
+			return match.replace(importPath, updatedImportPath);
 		});
 
-		// Endpoint to render the server component to a stream
-		app.get(`/rsc/${dir}`, async (c) => {
-			const Page = await import(`./build/${dir}/page.js`);
-			const Comp = createElement(Page.default);
+		// Ensure the destination directory exists
+		const destDir = path.dirname(dest);
+		await mkdir(destDir, { recursive: true });
 
-			const stream = ReactServerDom.renderToReadableStream(Comp, CLIENT_COMPONENT_MAP);
-			return new Response(stream);
-		});
+		// Write the updated content to the destination file
+		await writeFile(dest, content, 'utf-8');
+	} catch (err) {
+		console.error(`Error writing file to ${dest}:`, err);
 	}
 }
-
-// Serve static assets from 'build' and 'public' directories
-app.use('/build/*', serveStatic());
-app.use('/*', serveStatic({ root: './public' }));
-
-// Initialize and start the server
-async function startServer() {
-	await build();
-	await createRoutes();
-
-	serve(
-		{
-			fetch: app.fetch,
-			port: 8910
-		},
-		(info) => {
-			console.log(`Listening on http://localhost:${info.port}`);
-		}
-	);
-}
-
-startServer().catch((err) => {
-	console.error('Failed to start the server:', err);
-});
