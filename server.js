@@ -61,7 +61,7 @@ async function startServer() {
 	serve(
 		{
 			fetch: app.fetch,
-			port: 8981
+			port: 8982
 		},
 		(info) => {
 			console.log(`Listening on http://localhost:${info.port}`);
@@ -227,7 +227,7 @@ async function buildClient() {
 			format: 'esm',
 			logLevel: 'error',
 			entryPoints,
-			outdir: resolveBuild(),
+			outdir: entryPoints.length === 1 ? resolveBuild(pageEntryPoint) : resolveBuild(),
 			splitting: true,
 			write: false,
 			plugins: [
@@ -309,7 +309,6 @@ async function copyAndFixImports(src, dest) {
 
 		// Write the updated content to the destination file
 		await writeFile(dest, content, 'utf-8');
-		console.log(`File successfully written to ${dest}`);
 	} catch (err) {
 		console.error(`Error writing file to ${dest}:`, err);
 	}
