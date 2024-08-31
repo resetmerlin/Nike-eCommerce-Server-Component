@@ -9,7 +9,7 @@ import { parse } from 'es-module-lexer';
 import path, { relative } from 'node:path';
 import { sassPlugin } from 'esbuild-sass-plugin';
 import {
-	getDirectories,
+	getPages,
 	resolveApp,
 	resolveBuild,
 	resolveCreateBuild,
@@ -24,7 +24,7 @@ const REACT_COMPONENT_REGEX = /\.jsx$/;
 
 // Function to dynamically create routes based on the directories
 async function createRoutes() {
-	const directories = await getDirectories(resolveApp(''));
+	const directories = await getPages(resolveApp(''));
 
 	for (let dir of directories) {
 		app.get(`/${dir}`, async (c) => {
@@ -88,7 +88,7 @@ async function buildRSC() {
 	/**
 	 * Get all the folder that inside of app directory
 	 */
-	const directories = await getDirectories(resolveApp(''));
+	const directories = await getPages(resolveApp(''));
 
 	for (let dir of directories) {
 		// Build server components
@@ -167,7 +167,7 @@ async function buildRSC() {
 
 /** Build client components */
 async function buildClient() {
-	const directories = await getDirectories(resolveApp(''));
+	const directories = await getPages(resolveApp(''));
 
 	for (const dir of directories) {
 		const bundleDir = `${dir}/_client.jsx`;

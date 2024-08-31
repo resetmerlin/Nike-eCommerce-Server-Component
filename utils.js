@@ -1,9 +1,10 @@
-import { readdir } from 'fs/promises';
+import { readdir, stat } from 'fs/promises';
 import { existsSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { mkdir } from 'node:fs/promises';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { join } from 'path';
 
 const appDir = new URL('./app/', import.meta.url);
 const buildDir = new URL('./build/', import.meta.url);
@@ -25,9 +26,22 @@ export function resolveCreateBuild(path = '') {
 	return dir;
 }
 
-export async function getDirectories(source) {
+export async function getPages(source) {
+	const pages = [];
+
 	const dirents = await readdir(source, { withFileTypes: true });
-	return dirents.filter((dirent) => dirent.isDirectory()).map((dirent) => dirent.name);
+
+	const directories = dirents.filter((dirent) => dirent.isDirectory()).map((dirent) => dirent.name);
+
+	for (const dir of directories) {
+		const pageFilePath = join(source, dir, 'page.jsx');
+
+		if (existsSync(pageFilePath)) {
+			pages.push(dir);
+		}
+	}
+
+	return pages;
 }
 
 export async function getDirectoriesPath(source) {
