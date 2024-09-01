@@ -26,14 +26,20 @@ export function resolveCreateBuild(path = '') {
 	return dir;
 }
 
+/**
+ * Recursively searches through directories to find those that contain a `page.jsx` file.
+ * @param {string} source - The root directory path to start the search.
+ * @returns {Promise<string[]>} - An array of directory names that contain a `page.jsx` file.
+ */
 export async function getPages(source) {
 	const pages = [];
+	const ROOT_DIR = '/';
 
 	const dirents = await readdir(source, { withFileTypes: true });
 
 	const directories = dirents.filter((dirent) => dirent.isDirectory()).map((dirent) => dirent.name);
 
-	for (const dir of directories) {
+	for (const dir of [...directories, ROOT_DIR]) {
 		const pageFilePath = join(source, dir, 'page.jsx');
 
 		if (existsSync(pageFilePath)) {
@@ -51,7 +57,11 @@ export async function getDirectoriesPath(source) {
 		.map((dirent) => dirent.parentPath + dirent.name);
 }
 
-/** Function to copy a file and update import paths  */
+/**
+ * Function to copy a file from `src` to `dest` and update its import paths
+ * @param {string} src - The source file path
+ * @param {string} dest - The destination file path
+ */
 export async function updateImportPath(src, dest) {
 	try {
 		// Read the source file
