@@ -153,50 +153,8 @@ async function buildRSC() {
 	}
 }
 
-async function buildBundler() {
-	const bundleEntryPoints = {};
-	for (const route of routes) {
-		const bundleDir = `${route}/_client.jsx`;
-
-		const code = `
-			import { createRoot } from 'react-dom/client';
-			import { createFromFetch } from 'react-server-dom-webpack/client';
-
-			// HACK: map webpack resolution to native ESM
-			// @ts-expect-error Property '__webpack_require__' does not exist on type 'Window & typeof globalThis'.
-			window.__webpack_require__ = async (id) => {
-				return import(id);
-			};
-
-			// @ts-expect-error \`root\` might be null
-			const root = createRoot(document.getElementById('root'));
-
-			// Construct the fetch URL for the server component stream
-			const fetchUrl = \`/rsc/${route}\`;
-
-			/**
-			 * Fetch your server component stream from \`/rsc/[route]\`
-			 * and render results into the root element as they come in.
-			 */
-			createFromFetch(fetch(fetchUrl)).then((comp) => {
-				root.render(comp);
-			});
-		`;
-
-		const destination = resolveBuild(bundleDir);
-
-		await writeFile(destination, code);
-
-		bundleEntryPoints[route] = destination;
-	}
-
-	return bundleEntryPoints;
-}
-
 /** Build client components */
 async function buildClient() {
-	const bundleEntryPoints = await buildBundler();
-
 	for (const pageEntryPoint of clientEntryPoints.keys()) {
 		const clientEntryLists = clientEntryPoints.get(pageEntryPoint).map(async (entry) => {
 			const fileName = path.basename(entry);
@@ -215,7 +173,7 @@ async function buildClient() {
 
 		const promisedClientEntryLists = await Promise.all(clientEntryLists);
 
-		const entryPoints = [...promisedClientEntryLists, bundleEntryPoints[pageEntryPoint]];
+		const entryPoints = [...promisedClientEntryLists];
 
 		const { outputFiles } = await esbuild({
 			bundle: true,
