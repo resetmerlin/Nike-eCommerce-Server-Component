@@ -90,8 +90,8 @@ async function buildRSC() {
 			bundle: true,
 			format: 'esm',
 			logLevel: 'error',
-			entryPoints: [resolveApp(`${route}/page.jsx`)], // app/yourFolder/page.jsx
-			outdir: resolveBuild(route), // build/yourFolder instead of build/app/yourFolder
+			entryPoints: [resolveApp(`${route}/page.jsx`)],
+			outdir: resolveBuild(route),
 			packages: 'external',
 			plugins: [
 				{
@@ -104,83 +104,21 @@ async function buildRSC() {
 									return { external: true }; // Skip processing .scss files
 								}
 
-								/**
-								 * if the path starts with relative path, change it into absolute path
-								 * @example
-								 * ../../components/Product/index.jsx
-								 * // into
-								 * yourRootDir/components/Product/index.jsx
-								 */
 								const absolutePath = relativePath.startsWith('.')
 									? path.resolve(path.dirname(importer), relativePath)
 									: resolveApp(relativePath);
 
-								/**
-								 * Get relative entry points based on the root directory and absolute directory
-								 * @example
-								 * yourRootDir/components/Product/index.jsx
-								 * // into
-								 * components/Product/index.jsx
-								 *
-								 */
 								const entryDirLists = path.relative(ROOT_DIRECTORY, absolutePath);
 								const contents = await readFile(absolutePath, 'utf-8');
 
 								// Needs to bundle client component and server component separately. so add client components path to build later
 								if (!contents.startsWith("'use client'")) {
-									const { outputFiles } = await esbuild({
-										bundle: true,
-										format: 'esm',
-										logLevel: 'error',
-										entryPoints: [path.join(resolveBuild(route), '_client.jsx')],
-										outdir: resolveBuild(route),
-										splitting: true,
-										write: false,
-										plugins: [
-											sassPlugin() // Include the sassPlugin for client build
-										],
-										loader: {
-											'.jsx': 'jsx', // Ensuring that .jsx files are handled correctly
-											'.scss': 'css' // Ensuring that .scss files are handled correctly
-										}
-									});
+									const entryPoints = [path.join(resolveBuild(route), '_client.jsx')];
+									const outdir = resolveBuild(route);
 
-									outputFiles.forEach(async (file) => {
-										// Parse file export names
-										const [, exports] = parse(file.text);
-										let newContents = file.text;
+									await esbuildCient(entryPoints, outdir);
 
-										for (const exp of exports) {
-											// Create a unique lookup key for each exported component.
-											// Could be any identifier!
-											// We'll choose the file path + export name for simplicity.
-											const key = file.path + exp.n;
-
-											CLIENT_COMPONENT_MAP[key] = {
-												// Have the browser import your component from your server
-												// at `/build/[component].js`
-												id: `/build/${relative(resolveBuild(), file.path)}`,
-												// Use the detected export name
-												name: exp.n,
-												// Turn off chunks. This is webpack-specific
-												chunks: [],
-												// Use an async import for the built resource in the browser
-												async: true
-											};
-
-											// Tag each component export with a special `react.client.reference` type
-											// and the map key to look up import information.
-											// This tells your stream renderer to avoid rendering the
-											// client component server-side. Instead, import the built component
-											// client-side at `clientComponentMap[key].id`
-											newContents += `
-								${exp.ln}.$$id = ${JSON.stringify(key)};
-								${exp.ln}.$$typeof = Symbol.for("react.client.reference");
-											`;
-										}
-										await writeFile(file.path, newContents);
-									});
-									return; // check it is not client component or not
+									return;
 								}
 
 								if (!clientEntryPoints.has(route)) {
@@ -231,59 +169,59 @@ async function buildClient() {
 			path.join(resolveBuild(pageEntryPoint), '_client.jsx')
 		];
 
-		console.log(entryPoints);
-
-		const { outputFiles } = await esbuild({
-			bundle: true,
-			format: 'esm',
-			logLevel: 'error',
-			entryPoints,
-			outdir: resolveBuild(),
-			splitting: true,
-			write: false,
-			plugins: [
-				sassPlugin() // Include the sassPlugin for client build
-			],
-			loader: {
-				'.jsx': 'jsx', // Ensuring that .jsx files are handled correctly
-				'.scss': 'css' // Ensuring that .scss files are handled correctly
-			}
-		});
-
-		outputFiles.forEach(async (file) => {
-			// Parse file export names
-			const [, exports] = parse(file.text);
-			let newContents = file.text;
-
-			for (const exp of exports) {
-				// Create a unique lookup key for each exported component.
-				// Could be any identifier!
-				// We'll choose the file path + export name for simplicity.
-				const key = file.path + exp.n;
-
-				CLIENT_COMPONENT_MAP[key] = {
-					// Have the browser import your component from your server
-					// at `/build/[component].js`
-					id: `/build/${relative(resolveBuild(), file.path)}`,
-					// Use the detected export name
-					name: exp.n,
-					// Turn off chunks. This is webpack-specific
-					chunks: [],
-					// Use an async import for the built resource in the browser
-					async: true
-				};
-
-				// Tag each component export with a special `react.client.reference` type
-				// and the map key to look up import information.
-				// This tells your stream renderer to avoid rendering the
-				// client component server-side. Instead, import the built component
-				// client-side at `clientComponentMap[key].id`
-				newContents += `
-	${exp.ln}.$$id = ${JSON.stringify(key)};
-	${exp.ln}.$$typeof = Symbol.for("react.client.reference");
-				`;
-			}
-			await writeFile(file.path, newContents);
-		});
+		await esbuildCient(entryPoints, resolveBuild());
 	}
+}
+
+async function esbuildCient(entryPoints, outdir) {
+	const { outputFiles } = await esbuild({
+		bundle: true,
+		format: 'esm',
+		logLevel: 'error',
+		entryPoints,
+		outdir,
+		splitting: true,
+		write: false,
+		plugins: [sassPlugin()],
+		loader: {
+			'.jsx': 'jsx',
+			'.scss': 'css'
+		}
+	});
+
+	outputFiles.forEach(async (file) => {
+		// Parse file export names
+		const [, exports] = parse(file.text);
+		let newContents = file.text;
+
+		for (const exp of exports) {
+			// Create a unique lookup key for each exported component.
+			// Could be any identifier!
+			// We'll choose the file path + export name for simplicity.
+			const key = file.path + exp.n;
+
+			CLIENT_COMPONENT_MAP[key] = {
+				// Have the browser import your component from your server
+				// at `/build/[component].js`
+				id: `/build/${relative(resolveBuild(), file.path)}`,
+				// Use the detected export name
+				name: exp.n,
+				// Turn off chunks. This is webpack-specific
+				chunks: [],
+				// Use an async import for the built resource in the browser
+				async: true
+			};
+
+			// Tag each component export with a special `react.client.reference` type
+			// and the map key to look up import information.
+			// This tells your stream renderer to avoid rendering the
+			// client component server-side. Instead, import the built component
+			// client-side at `clientComponentMap[key].id`
+			newContents += `
+${exp.ln}.$$id = ${JSON.stringify(key)};
+${exp.ln}.$$typeof = Symbol.for("react.client.reference");
+			`;
+		}
+		await writeFile(file.path, newContents);
+	});
 }
